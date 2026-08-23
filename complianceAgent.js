@@ -1,8 +1,12 @@
 // ==========================================
 // AGENT 2 — COMPLIANCE ANALYSIS AGENT
+// UNCERTAINTY + CONFLICT RESOLUTION
 // ==========================================
 
-export async function complianceAgent(evidencePackage, control) {
+export async function complianceAgent(
+    evidencePackage,
+    control
+) {
 
     console.log("\n================================");
     console.log("COMPLIANCE AGENT STARTED");
@@ -11,6 +15,10 @@ export async function complianceAgent(evidencePackage, control) {
 
     try {
 
+        // ======================================
+        // READ SHARED EVIDENCE STATE
+        // ======================================
+
         const webResults =
             evidencePackage?.evidence?.web?.results || [];
 
@@ -18,64 +26,242 @@ export async function complianceAgent(evidencePackage, control) {
             evidencePackage?.evidence?.research?.results || [];
 
         const totalEvidence =
-            webResults.length + researchResults.length;
+            webResults.length +
+            researchResults.length;
 
-        let status;
-        let reason;
 
-        // Analyze the evidence collected by Agent 1
-        if (totalEvidence === 0) {
+        console.log(
+            "[COMPLIANCE] Web evidence:",
+            webResults.length
+        );
 
-            status = "Not Supported";
+        console.log(
+            "[COMPLIANCE] Research evidence:",
+            researchResults.length
+        );
 
-            reason =
-                "No relevant evidence was found for the selected control.";
+        console.log(
+            "[COMPLIANCE] Total evidence:",
+            totalEvidence
+        );
 
-        } else if (totalEvidence < 3) {
 
-            status = "Insufficient Evidence";
+        // ======================================
+        // SOURCE DIVERSITY / CONFLICT ANALYSIS
+        // ======================================
 
-            reason =
-                "Some evidence was found, but additional evidence is required to confidently support the control.";
+        let conflictDetected = false;
+
+        if (
+            webResults.length === 0 &&
+            researchResults.length > 0
+        ) {
+
+            conflictDetected = true;
+
+            console.log(
+                "[COMPLIANCE] Limited source agreement: only research evidence available"
+            );
+
+        }
+
+        if (
+            researchResults.length === 0 &&
+            webResults.length > 0
+        ) {
+
+            conflictDetected = true;
+
+            console.log(
+                "[COMPLIANCE] Limited source agreement: only web evidence available"
+            );
+
+        }
+
+
+        // ======================================
+        // UNCERTAINTY CALCULATION
+        // ======================================
+
+        let confidence = 0;
+        let uncertainty = "High";
+
+        if (
+            totalEvidence >= 8 &&
+            webResults.length > 0 &&
+            researchResults.length > 0
+        ) {
+
+            confidence = 90;
+            uncertainty = "Low";
+
+        } else if (totalEvidence >= 5) {
+
+            confidence = 75;
+            uncertainty = "Medium";
+
+        } else if (totalEvidence >= 3) {
+
+            confidence = 60;
+            uncertainty = "Medium";
+
+        } else if (totalEvidence > 0) {
+
+            confidence = 35;
+            uncertainty = "High";
 
         } else {
 
-            status = "Supported";
-
-            reason =
-                "Sufficient evidence was collected from the available sources to support the control.";
+            confidence = 0;
+            uncertainty = "High";
 
         }
+
+
+        // Reduce confidence when evidence comes
+        // from only one source type
+
+        if (conflictDetected) {
+
+            confidence = Math.max(
+                0,
+                confidence - 15
+            );
+
+        }
+
+
+        // ======================================
+        // COMPLIANCE DECISION
+        // ======================================
+
+        let decisionStatus;
+        let reason;
+
+        if (totalEvidence === 0) {
+
+            decisionStatus =
+                "Not Supported";
+
+            reason =
+                "No relevant evidence was found. The system cannot support the control and requires additional investigation.";
+
+        } else if (totalEvidence < 3) {
+
+            decisionStatus =
+                "Insufficient Evidence";
+
+            reason =
+                "A small amount of evidence was found, but the evidence is insufficient for a confident decision.";
+
+        } else if (conflictDetected) {
+
+            decisionStatus =
+                "Partially Supported";
+
+            reason =
+                "Evidence was found, but source coverage is limited to one source type. Additional independent verification is recommended.";
+
+        } else {
+
+            decisionStatus =
+                "Supported";
+
+            reason =
+                "Sufficient evidence was independently collected from both web and research sources.";
+
+        }
+
+
+        // ======================================
+        // SELF-EVALUATION
+        // ======================================
+
+        let needsMoreEvidence =
+            false;
+
+        if (
+            decisionStatus !== "Supported" ||
+            confidence < 70
+        ) {
+
+            needsMoreEvidence = true;
+
+        }
+
+
+        console.log(
+            "[COMPLIANCE] Decision:",
+            decisionStatus
+        );
+
+        console.log(
+            "[COMPLIANCE] Confidence:",
+            `${confidence}%`
+        );
+
+        console.log(
+            "[COMPLIANCE] Uncertainty:",
+            uncertainty
+        );
+
+        console.log(
+            "[COMPLIANCE] Conflict detected:",
+            conflictDetected
+        );
+
+        console.log(
+            "[COMPLIANCE] Self-evaluation — more evidence needed:",
+            needsMoreEvidence
+        );
+
+
+        // ======================================
+        // FINAL ANALYSIS
+        // ======================================
 
         const analysis = {
 
             control: control,
 
-            status: status,
+            status: decisionStatus,
 
             evidenceCount: totalEvidence,
+
+            confidence: confidence,
+
+            uncertainty: uncertainty,
+
+            conflictDetected: conflictDetected,
+
+            needsMoreEvidence:
+                needsMoreEvidence,
 
             reason: reason,
 
             sources: {
-                web: webResults.length,
-                research: researchResults.length
+
+                web:
+                    webResults.length,
+
+                research:
+                    researchResults.length
+
             }
 
         };
 
-        console.log(
-            "Compliance Result:",
-            status
-        );
 
         return {
 
-            agent: "Compliance Analysis Agent",
+            agent:
+                "Compliance Analysis Agent",
 
-            status: "success",
+            status:
+                "success",
 
-            analysis: analysis
+            analysis:
+                analysis
 
         };
 
@@ -88,14 +274,20 @@ export async function complianceAgent(evidencePackage, control) {
 
         return {
 
-            agent: "Compliance Analysis Agent",
+            agent:
+                "Compliance Analysis Agent",
 
-            status: "error",
+            status:
+                "error",
 
-            analysis: null,
+            analysis:
+                null,
 
-            error: error.message
+            error:
+                error.message
 
         };
+
     }
+
 }
