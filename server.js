@@ -1,961 +1,1579 @@
-const landingScreen = document.getElementById("landingScreen");
-const agentApp = document.getElementById("agentApp");
-const enterAgent = document.getElementById("enterAgent");
+import express from "express";
+import cors from "cors";
+import dotenv from "dotenv";
 
-const input = document.querySelector(".search-box input");
-const runButton = document.querySelector(".search-box button");
-const output = document.querySelector(".output");
-const steps = document.querySelectorAll(".step");
+import { evidenceAgent } from "./agents/evidenceAgent.js";
+import { complianceAgent } from "./agents/complianceAgent.js";
 
-enterAgent.addEventListener("click", () => {
-    landingScreen.classList.add("hide");
+import {
+    startContext,
+    storeEvidence,
+    storeCompliance,
+    getContext
+} from "./contextManager.js";
 
-    setTimeout(() => {
-        agentApp.classList.add("show");
-    }, 500);
-});
+import {
+    startTrace,
+    addTraceEvent,
+    endTrace
+} from "./traceLogger.js";
 
-runButton.addEventListener("click", runAgent);
+dotenv.config();
 
-function delay(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
+const app = express();
+
+app.use(cors());
+app.use(express.json());
+
+const PORT = process.env.PORT || 3000;
+
+
+// ==========================================
+// HELPER — CREATE SMART SEARCH QUERY
+// ==========================================
+
+function cleanSearchQuery(query) {
+
+    const stopWords = [
+        "latest",
+        "activities",
+        "activity",
+        "about",
+        "news",
+        "research",
+        "find",
+        "search",
+        "show",
+        "me"
+    ];
+
+    const words = String(query || "")
+        .toLowerCase()
+        .split(/\s+/)
+        .filter(Boolean)
+        .filter(word => !stopWords.includes(word));
+
+    return words.join(" ") || String(query || "");
 }
 
 
 // ==========================================
-// MAIN MULTI-AGENT SYSTEM
+// TOOL 1 — HACKER NEWS API
 // ==========================================
 
-async function runAgent() {
+async function webSearch(query, trace = null) {
 
-    const query = input.value.trim();
+    const toolStart = Date.now();
 
-    if (!query) {
-        input.focus();
-        return;
+    if (trace) {
+        addTraceEvent(trace, "tool_start", {
+            tool: "Hacker News API",
+            query
+        });
     }
-
-    const analysis = analyzeQuery(query);
-
-    runButton.disabled = true;
-    runButton.textContent = "Investigating...";
-
-    steps.forEach(step => step.classList.remove("active"));
-
-
-    // ==========================================
-    // LIVE INVESTIGATION UI
-    // ==========================================
-
-    output.innerHTML = `
-        <div class="live-investigation">
-
-            <div class="live-header">
-                <div>
-                    <span class="live-dot"></span>
-                    MULTI-AGENT INVESTIGATION
-                </div>
-
-                <span class="live-badge">RUNNING</span>
-            </div>
-
-            <div class="live-query">
-
-                <small>RESEARCH QUERY</small>
-
-                <h3>${escapeHTML(query)}</h3>
-
-                <div class="detected-intent">
-
-                    <span>🧠</span>
-
-                    <div>
-                        <small>DETECTED INTENT</small>
-                        <b>${escapeHTML(analysis.intent)}</b>
-                    </div>
-
-                </div>
-
-            </div>
-
-
-            <div class="live-timeline">
-
-                <div class="timeline-item active">
-
-                    <div class="timeline-icon">🤖</div>
-
-                    <div>
-                        <b>Agent 1 — Evidence Collection</b>
-                        <p>Collecting evidence from external sources...</p>
-                    </div>
-
-                </div>
-
-
-                <div class="timeline-item">
-
-                    <div class="timeline-icon">🔎</div>
-
-                    <div>
-                        <b>Evidence Processing</b>
-                        <p>Waiting for Agent 1...</p>
-                    </div>
-
-                </div>
-
-
-                <div class="timeline-item">
-
-                    <div class="timeline-icon">🧠</div>
-
-                    <div>
-                        <b>Agent 2 — Compliance Analysis</b>
-                        <p>Waiting for evidence...</p>
-                    </div>
-
-                </div>
-
-
-                <div class="timeline-item">
-
-                    <div class="timeline-icon">📊</div>
-
-                    <div>
-                        <b>Compliance Classification</b>
-                        <p>Waiting for Agent 2...</p>
-                    </div>
-
-                </div>
-
-
-                <div class="timeline-item">
-
-                    <div class="timeline-icon">⚡</div>
-
-                    <div>
-                        <b>Generating Final Intelligence</b>
-                        <p>Waiting...</p>
-                    </div>
-
-                </div>
-
-            </div>
-
-        </div>
-    `;
-
-
-    const items =
-        document.querySelectorAll(".timeline-item");
-
-
-    steps[0].classList.add("active");
-
-    await delay(700);
-
-
-    // ==========================================
-    // CALL BACKEND
-    // ==========================================
-
-    let agentResult;
 
     try {
 
+        // ======================================
+        // CONTROLLED FAILURE TEST
+        // ======================================
+
+        if (
+            String(query)
+                .toLowerCase()
+                .includes("testfailure")
+        ) {
+
+            throw new Error(
+                "Controlled Web Search Failure for tracing test"
+            );
+
+        }
+
+
+        const searchQuery = cleanSearchQuery(query);
+
         console.log(
-            "Sending query to multi-agent backend:",
-            query
+            "Web Search Query:",
+            searchQuery
         );
 
 
         const response = await fetch(
-            "http://localhost:3000/api/research",
-            {
-                method: "POST",
-
-                headers: {
-                    "Content-Type": "application/json"
-                },
-
-                body: JSON.stringify({
-                    query: query,
-                    control: query
-                })
-            }
+            `https://hn.algolia.com/api/v1/search?query=${encodeURIComponent(searchQuery)}&tags=story&hitsPerPage=5`
         );
 
 
         if (!response.ok) {
 
             throw new Error(
-                `Backend request failed: ${response.status}`
+                `Hacker News API error: ${response.status}`
             );
 
         }
 
 
-        agentResult =
-            await response.json();
+        const data = await response.json();
+
+
+        let hits = Array.isArray(data.hits)
+            ? data.hits
+            : [];
+
+
+        // ======================================
+        // FALLBACK SEARCH
+        // ======================================
+
+        if (hits.length === 0) {
+
+            const firstWord =
+                searchQuery.split(" ")[0] || query;
+
+
+            console.log(
+                "Hacker News fallback query:",
+                firstWord
+            );
+
+
+            if (trace) {
+
+                addTraceEvent(
+                    trace,
+                    "tool_fallback",
+                    {
+                        tool: "Hacker News API",
+                        reason:
+                            "No results from original query",
+                        fallbackQuery:
+                            firstWord
+                    }
+                );
+
+            }
+
+
+            const fallbackResponse = await fetch(
+                `https://hn.algolia.com/api/v1/search?query=${encodeURIComponent(firstWord)}&tags=story&hitsPerPage=5`
+            );
+
+
+            if (!fallbackResponse.ok) {
+
+                throw new Error(
+                    `Hacker News fallback API error: ${fallbackResponse.status}`
+                );
+
+            }
+
+
+            const fallbackData =
+                await fallbackResponse.json();
+
+
+            hits = Array.isArray(fallbackData.hits)
+                ? fallbackData.hits
+                : [];
+
+        }
+
+
+        const results = hits.map(item => ({
+
+            title:
+                item.title ||
+                item.story_title ||
+                "Untitled",
+
+            url:
+                item.url ||
+                item.story_url ||
+                "",
+
+            source:
+                "Hacker News"
+
+        }));
+
+
+        const latency =
+            Date.now() - toolStart;
 
 
         console.log(
-            "MULTI-AGENT RESPONSE:",
-            agentResult
+            "Hacker News Results:",
+            results.length
         );
 
+
+        if (trace) {
+
+            addTraceEvent(
+                trace,
+                "tool_success",
+                {
+                    tool:
+                        "Hacker News API",
+
+                    resultCount:
+                        results.length,
+
+                    latencyMs:
+                        latency
+                }
+            );
+
+        }
+
+
+        return {
+
+            tool:
+                "Web Search",
+
+            status:
+                "success",
+
+            count:
+                results.length,
+
+            results,
+
+            latencyMs:
+                latency,
+
+            message:
+                `Found ${results.length} web/news results`
+
+        };
 
     } catch (error) {
 
+        const latency =
+            Date.now() - toolStart;
+
+
         console.error(
-            "BACKEND ERROR:",
-            error
+            "Web Search Error:",
+            error.message
         );
 
 
-        output.innerHTML = `
+        if (trace) {
 
-            <div class="final-report">
+            addTraceEvent(
+                trace,
+                "tool_error",
+                {
+                    tool:
+                        "Hacker News API",
 
-                <div class="report-top">
+                    error:
+                        error.message,
 
-                    <div>
-                        <span class="complete-dot"></span>
-                        CONNECTION ERROR
-                    </div>
+                    latencyMs:
+                        latency,
 
-                    <span>ResearchAI</span>
+                    rootCause:
+                        "Controlled or external web search failure"
+                }
+            );
 
-                </div>
-
-
-                <div class="ai-insight">
-
-                    <h3>
-                        ⚠️ Backend Not Available
-                    </h3>
-
-                    <p>
-                        Please make sure the backend is running
-                        at http://localhost:3000
-                    </p>
-
-                    <p>
-                        Error:
-                        ${escapeHTML(error.message)}
-                    </p>
-
-                </div>
-
-            </div>
-
-        `;
+        }
 
 
-        runButton.disabled = false;
-        runButton.textContent = "Run Agent →";
+        return {
 
-        return;
+            tool:
+                "Web Search",
+
+            status:
+                "error",
+
+            count:
+                0,
+
+            results:
+                [],
+
+            latencyMs:
+                latency,
+
+            error:
+                error.message
+
+        };
+
+    }
+
+}
+
+
+// ==========================================
+// TOOL 2A — OPENALEX RESEARCH API
+// ==========================================
+
+async function searchOpenAlex(
+    searchQuery,
+    trace = null
+) {
+
+    const toolStart =
+        Date.now();
+
+
+    if (trace) {
+
+        addTraceEvent(
+            trace,
+            "tool_start",
+            {
+                tool:
+                    "OpenAlex API",
+
+                query:
+                    searchQuery
+            }
+        );
+
     }
 
 
-    // ==========================================
-    // AGENT 1 — EVIDENCE COLLECTION
-    // ==========================================
+    try {
 
-    items[0].classList.add("active");
-
-    items[0].querySelector("p").textContent =
-        "Evidence Collection Agent is collecting data...";
-
-    steps[1].classList.add("active");
-
-    await delay(700);
+        const response = await fetch(
+            `https://api.openalex.org/works?search=${encodeURIComponent(searchQuery)}&per-page=5`
+        );
 
 
-    const evidenceAgent =
-        agentResult.evidenceAgent || {};
+        if (!response.ok) {
 
-    const evidence =
-        evidenceAgent.evidence || {};
+            throw new Error(
+                `OpenAlex API error: ${response.status}`
+            );
 
-    const webEvidence =
-        evidence.web || {};
-
-    const researchEvidence =
-        evidence.research || {};
+        }
 
 
-    const webCount =
-        webEvidence.count || 0;
-
-    const researchCount =
-        researchEvidence.count || 0;
-
-    const totalEvidence =
-        webCount + researchCount;
+        const data =
+            await response.json();
 
 
-    // ==========================================
-    // EVIDENCE PROCESSING
-    // ==========================================
-
-    items[1].classList.add("active");
-
-    items[1].querySelector("p").textContent =
-        `${totalEvidence} evidence items collected from Web + Research sources`;
-
-    steps[2].classList.add("active");
-
-    await delay(900);
+        const works =
+            Array.isArray(data.results)
+                ? data.results
+                : [];
 
 
-    // ==========================================
-    // AGENT 2 — COMPLIANCE ANALYSIS
-    // ==========================================
+        const results =
+            works.map(item => ({
 
-    items[2].classList.add("active");
+                title:
+                    item.title ||
+                    "Untitled",
 
-    items[2].querySelector("p").textContent =
-        "Compliance Analysis Agent is analyzing collected evidence...";
+                url:
+                    item.doi
+                        ? `https://doi.org/${item.doi.replace(
+                            "https://doi.org/",
+                            ""
+                        )}`
+                        : "",
 
-    steps[3].classList.add("active");
+                publicationDate:
+                    item.publication_date ||
+                    "Unknown",
 
-    await delay(900);
+                citedBy:
+                    item.cited_by_count ?? 0,
 
+                source:
+                    "OpenAlex"
 
-    // ==========================================
-    // COMPLIANCE RESULT
-    // ==========================================
-
-    const complianceAgent =
-        agentResult.complianceAgent || {};
-
-    const complianceAnalysis =
-        complianceAgent.analysis || {};
-
-
-    const complianceStatus =
-        complianceAnalysis.status ||
-        "Insufficient Evidence";
+            }));
 
 
-    items[3].classList.add("active");
-
-    items[3].querySelector("p").textContent =
-        `Classification: ${complianceStatus}`;
-
-    steps[4].classList.add("active");
-
-    await delay(900);
+        const latency =
+            Date.now() - toolStart;
 
 
-    // ==========================================
-    // FINAL INTELLIGENCE
-    // ==========================================
+        if (trace) {
 
-    items[4].classList.add("active");
+            addTraceEvent(
+                trace,
+                "tool_success",
+                {
+                    tool:
+                        "OpenAlex API",
 
-    items[4].querySelector("p").textContent =
-        `Combining ${totalEvidence} evidence items with compliance analysis`;
+                    resultCount:
+                        results.length,
 
-    await delay(900);
+                    latencyMs:
+                        latency
+                }
+            );
+
+        }
 
 
-    showFinal(
-        query,
-        agentResult
+        return results;
+
+    } catch (error) {
+
+        const latency =
+            Date.now() - toolStart;
+
+
+        if (trace) {
+
+            addTraceEvent(
+                trace,
+                "tool_error",
+                {
+                    tool:
+                        "OpenAlex API",
+
+                    error:
+                        error.message,
+
+                    latencyMs:
+                        latency,
+
+                    rootCause:
+                        "Primary research API unavailable"
+                }
+            );
+
+        }
+
+        throw error;
+
+    }
+
+}
+
+
+// ==========================================
+// TOOL 2B — CROSSREF FALLBACK API
+// ==========================================
+
+async function searchCrossref(
+    searchQuery,
+    trace = null
+) {
+
+    const toolStart =
+        Date.now();
+
+
+    console.log(
+        "Using Crossref Research Fallback..."
     );
 
 
-    runButton.disabled = false;
-    runButton.textContent = "Run Agent →";
-}
+    if (trace) {
 
+        addTraceEvent(
+            trace,
+            "tool_start",
+            {
+                tool:
+                    "Crossref API",
 
-// ==========================================
-// FINAL MULTI-AGENT REPORT
-// ==========================================
-
-function showFinal(query, agentResult) {
-
-    const evidenceAgent =
-        agentResult.evidenceAgent || {};
-
-    const complianceAgent =
-        agentResult.complianceAgent || {};
-
-
-    const evidence =
-        evidenceAgent.evidence || {};
-
-    const webResult =
-        evidence.web || {};
-
-    const researchResult =
-        evidence.research || {};
-
-
-    const analysis =
-        complianceAgent.analysis || {};
-
-
-    const webResults =
-        Array.isArray(webResult.results)
-            ? webResult.results
-            : [];
-
-
-    const researchResults =
-        Array.isArray(researchResult.results)
-            ? researchResult.results
-            : [];
-
-
-    const totalEvidence =
-        webResults.length +
-        researchResults.length;
-
-
-    const status =
-        analysis.status ||
-        "Insufficient Evidence";
-
-
-    const reason =
-        analysis.reason ||
-        "Evidence analysis completed.";
-
-
-    // ==========================================
-    // BUILD SOURCE RESULTS
-    // ==========================================
-
-    let resultHTML = "";
-
-
-    // ------------------------------------------
-    // WEB RESULTS
-    // ------------------------------------------
-
-    if (webResults.length > 0) {
-
-        resultHTML += `
-
-            <div class="tool-results">
-
-                <div class="tool-results-header">
-
-                    <h3>
-                        Web Evidence
-                    </h3>
-
-                    <span>
-                        ${webResults.length} RESULTS
-                    </span>
-
-                </div>
-
-        `;
-
-
-        webResults.forEach(
-            (item, index) => {
-
-                const title =
-                    item.title ||
-                    "Untitled Result";
-
-                const url =
-                    item.url || "";
-
-
-                resultHTML += `
-
-                    <div class="result-item">
-
-                        <div class="result-number">
-                            ${index + 1}
-                        </div>
-
-                        <div class="result-content">
-
-                            ${url
-                        ? `
-                                        <a
-                                            href="${escapeHTML(url)}"
-                                            target="_blank"
-                                            rel="noopener noreferrer"
-                                            class="result-title"
-                                        >
-                                            ${escapeHTML(title)}
-                                        </a>
-                                    `
-                        : `
-                                        <div class="result-title">
-                                            ${escapeHTML(title)}
-                                        </div>
-                                    `
-                    }
-
-                            <div class="result-meta">
-
-                                <span>
-                                    📌 Hacker News
-                                </span>
-
-                            </div>
-
-                        </div>
-
-                    </div>
-
-                `;
-
+                query:
+                    searchQuery
             }
         );
-
-
-        resultHTML += `
-            </div>
-        `;
 
     }
 
 
-    // ------------------------------------------
-    // RESEARCH RESULTS
-    // ------------------------------------------
+    try {
 
-    if (researchResults.length > 0) {
+        const response =
+            await fetch(
+                `https://api.crossref.org/works?query=${encodeURIComponent(searchQuery)}&rows=5`
+            );
 
-        resultHTML += `
 
-            <div class="tool-results">
+        if (!response.ok) {
 
-                <div class="tool-results-header">
+            throw new Error(
+                `Crossref API error: ${response.status}`
+            );
 
-                    <h3>
-                        Research Evidence
-                    </h3>
-
-                    <span>
-                        ${researchResults.length} RESULTS
-                    </span>
-
-                </div>
-
-        `;
-
-
-        researchResults.forEach(
-            (item, index) => {
-
-                const title =
-                    item.title ||
-                    "Untitled Research";
-
-
-                const url =
-                    item.url || "";
-
-
-                const date =
-                    item.publicationDate
-                        ? `Published: ${item.publicationDate}`
-                        : "";
-
-
-                const citations =
-                    item.citedBy !== undefined
-                        ? `Citations: ${item.citedBy}`
-                        : "";
-
-
-                resultHTML += `
-
-                    <div class="result-item">
-
-                        <div class="result-number">
-                            ${index + 1}
-                        </div>
-
-                        <div class="result-content">
-
-                            ${url
-                        ? `
-                                        <a
-                                            href="${escapeHTML(url)}"
-                                            target="_blank"
-                                            rel="noopener noreferrer"
-                                            class="result-title"
-                                        >
-                                            ${escapeHTML(title)}
-                                        </a>
-                                    `
-                        : `
-                                        <div class="result-title">
-                                            ${escapeHTML(title)}
-                                        </div>
-                                    `
-                    }
-
-                            <div class="result-meta">
-
-                                <span>
-                                    📚 ${escapeHTML(
-                        item.source ||
-                        "Research Source"
-                    )}
-                                </span>
-
-                                ${date
-                        ? `
-                                            <span>
-                                                📅 ${escapeHTML(date)}
-                                            </span>
-                                        `
-                        : ""
-                    }
-
-                                ${citations
-                        ? `
-                                            <span>
-                                                📊 ${escapeHTML(citations)}
-                                            </span>
-                                        `
-                        : ""
-                    }
-
-                            </div>
-
-                        </div>
-
-                    </div>
-
-                `;
-
-            }
-        );
-
-
-        resultHTML += `
-            </div>
-        `;
-
-    }
-
-
-    // ==========================================
-    // FINAL UI
-    // ==========================================
-
-    output.innerHTML = `
-
-        <div class="final-report">
-
-
-            <!-- REPORT HEADER -->
-
-            <div class="report-top">
-
-                <div>
-
-                    <span class="complete-dot"></span>
-
-                    INVESTIGATION COMPLETE
-
-                </div>
-
-                <span>
-                    ResearchAI
-                </span>
-
-            </div>
-
-
-            <!-- QUERY -->
-
-            <div class="report-query">
-
-                <small>
-                    RESEARCH QUERY
-                </small>
-
-                <h2>
-                    ${escapeHTML(query)}
-                </h2>
-
-            </div>
-
-
-            <!-- ==================================
-                 MULTI-AGENT ARCHITECTURE
-                 ================================== -->
-
-            <div
-                class="ai-insight"
-                style="margin-bottom:20px;"
-            >
-
-                <h3>
-                    🤖 Multi-Agent Architecture
-                </h3>
-
-                <p>
-                    Two specialized agents collaborated
-                    sequentially to complete the investigation.
-                </p>
-
-            </div>
-
-
-            <!-- AGENT CARDS -->
-
-            <div class="report-summary">
-
-
-                <!-- AGENT 1 -->
-
-                <div class="summary-card">
-
-                    <span>
-                        🔎
-                    </span>
-
-                    <div>
-
-                        <b>
-                            Agent 1 — Evidence Collection
-                        </b>
-
-                        <p>
-                            Collected
-                            ${totalEvidence}
-                            evidence items
-                            from external sources.
-                        </p>
-
-                    </div>
-
-                </div>
-
-
-                <!-- COLLABORATION -->
-
-                <div class="summary-card">
-
-                    <span>
-                        🔄
-                    </span>
-
-                    <div>
-
-                        <b>
-                            Agent Collaboration
-                        </b>
-
-                        <p>
-                            Evidence Agent →
-                            Compliance Agent
-                        </p>
-
-                    </div>
-
-                </div>
-
-
-                <!-- AGENT 2 -->
-
-                <div class="summary-card">
-
-                    <span>
-                        🧠
-                    </span>
-
-                    <div>
-
-                        <b>
-                            Agent 2 — Compliance Analysis
-                        </b>
-
-                        <p>
-                            Analyzed evidence and
-                            classified the control.
-                        </p>
-
-                    </div>
-
-                </div>
-
-
-            </div>
-
-
-            <!-- ==================================
-                 COMPLIANCE RESULT
-                 ================================== -->
-
-            <div
-                class="ai-insight"
-                style="margin-top:20px;"
-            >
-
-                <h3>
-                    ${status === "Supported"
-            ? "✅"
-            : status === "Insufficient Evidence"
-                ? "⚠️"
-                : "❌"
         }
 
-                    Compliance Result:
-                    ${escapeHTML(status)}
-                </h3>
 
-                <p>
-                    ${escapeHTML(reason)}
-                </p>
-
-                <p>
-                    <strong>
-                        Evidence analyzed:
-                    </strong>
-
-                    ${totalEvidence}
-                </p>
-
-            </div>
+        const data =
+            await response.json();
 
 
-            <!-- SOURCE RESULTS -->
-
-            ${resultHTML}
-
-
-            <!-- FINAL INSIGHT -->
-
-            <div class="ai-insight">
-
-                <h3>
-                    💡 Actionable Insight
-                </h3>
-
-                <p>
-                    The Evidence Collection Agent gathered
-                    external evidence and passed it to the
-                    Compliance Analysis Agent. The second
-                    agent evaluated the evidence and produced
-                    the final compliance classification.
-                </p>
-
-            </div>
+        const works =
+            data.message &&
+                Array.isArray(data.message.items)
+                ? data.message.items
+                : [];
 
 
-        </div>
+        const results =
+            works.map(item => {
 
-    `;
+                let publicationDate =
+                    "Unknown";
+
+
+                if (
+                    item.published &&
+                    Array.isArray(
+                        item.published["date-parts"]
+                    )
+                ) {
+
+                    const dateParts =
+                        item.published["date-parts"][0];
+
+
+                    if (dateParts) {
+
+                        publicationDate =
+                            dateParts.join("-");
+
+                    }
+
+                }
+
+
+                return {
+
+                    title:
+                        Array.isArray(item.title) &&
+                            item.title.length > 0
+                            ? item.title[0]
+                            : "Untitled",
+
+                    url:
+                        item.URL ||
+                        (
+                            item.DOI
+                                ? `https://doi.org/${item.DOI}`
+                                : ""
+                        ),
+
+                    publicationDate,
+
+                    citedBy:
+                        item["is-referenced-by-count"] ?? 0,
+
+                    source:
+                        "Crossref"
+
+                };
+
+            });
+
+
+        const latency =
+            Date.now() - toolStart;
+
+
+        if (trace) {
+
+            addTraceEvent(
+                trace,
+                "tool_success",
+                {
+                    tool:
+                        "Crossref API",
+
+                    resultCount:
+                        results.length,
+
+                    latencyMs:
+                        latency
+                }
+            );
+
+        }
+
+
+        return results;
+
+    } catch (error) {
+
+        const latency =
+            Date.now() - toolStart;
+
+
+        if (trace) {
+
+            addTraceEvent(
+                trace,
+                "tool_error",
+                {
+                    tool:
+                        "Crossref API",
+
+                    error:
+                        error.message,
+
+                    latencyMs:
+                        latency,
+
+                    rootCause:
+                        "Fallback research API unavailable"
+                }
+            );
+
+        }
+
+        throw error;
+
+    }
+
 }
 
 
 // ==========================================
-// SECURITY
+// TOOL 2 — RESEARCH SEARCH
 // ==========================================
 
-function escapeHTML(text) {
+async function researchSearch(
+    query,
+    trace = null
+) {
 
-    const div =
-        document.createElement("div");
+    const searchStart =
+        Date.now();
 
-    div.textContent =
-        String(text ?? "");
 
-    return div.innerHTML;
+    const searchQuery =
+        cleanSearchQuery(query);
+
+
+    console.log(
+        "Research Search Query:",
+        searchQuery
+    );
+
+
+    // ======================================
+    // TRY OPENALEX
+    // ======================================
+
+    try {
+
+        console.log(
+            "Trying OpenAlex API..."
+        );
+
+
+        let results =
+            await searchOpenAlex(
+                searchQuery,
+                trace
+            );
+
+
+        // ==================================
+        // OPENALEX EMPTY RESULT FALLBACK
+        // ==================================
+
+        if (results.length === 0) {
+
+            const firstWord =
+                searchQuery.split(" ")[0] ||
+                searchQuery;
+
+
+            console.log(
+                "OpenAlex fallback query:",
+                firstWord
+            );
+
+
+            if (trace) {
+
+                addTraceEvent(
+                    trace,
+                    "decision",
+                    {
+                        decision:
+                            "OpenAlex returned no results",
+
+                        action:
+                            "Retry using simplified query",
+
+                        fallbackQuery:
+                            firstWord
+                    }
+                );
+
+            }
+
+
+            results =
+                await searchOpenAlex(
+                    firstWord,
+                    trace
+                );
+
+        }
+
+
+        console.log(
+            "OpenAlex Results:",
+            results.length
+        );
+
+
+        return {
+
+            tool:
+                "Research Search",
+
+            status:
+                "success",
+
+            count:
+                results.length,
+
+            results,
+
+            latencyMs:
+                Date.now() -
+                searchStart,
+
+            provider:
+                "OpenAlex",
+
+            message:
+                `Found ${results.length} research results using OpenAlex`
+
+        };
+
+    } catch (openAlexError) {
+
+        console.log(
+            "OpenAlex unavailable:",
+            openAlexError.message
+        );
+
+
+        console.log(
+            "Switching to Crossref..."
+        );
+
+
+        if (trace) {
+
+            addTraceEvent(
+                trace,
+                "recovery",
+                {
+                    failedTool:
+                        "OpenAlex API",
+
+                    rootCause:
+                        openAlexError.message,
+
+                    diagnosis:
+                        "Primary research source unavailable",
+
+                    recoveryAction:
+                        "Switch to Crossref fallback"
+                }
+            );
+
+        }
+
+
+        // ==================================
+        // TRY CROSSREF FALLBACK
+        // ==================================
+
+        try {
+
+            let results =
+                await searchCrossref(
+                    searchQuery,
+                    trace
+                );
+
+
+            if (results.length === 0) {
+
+                const firstWord =
+                    searchQuery.split(" ")[0] ||
+                    searchQuery;
+
+
+                if (trace) {
+
+                    addTraceEvent(
+                        trace,
+                        "decision",
+                        {
+                            decision:
+                                "Crossref returned no results",
+
+                            action:
+                                "Retry using simplified query",
+
+                            fallbackQuery:
+                                firstWord
+                        }
+                    );
+
+                }
+
+
+                results =
+                    await searchCrossref(
+                        firstWord,
+                        trace
+                    );
+
+            }
+
+
+            console.log(
+                "Crossref Results:",
+                results.length
+            );
+
+
+            return {
+
+                tool:
+                    "Research Search",
+
+                status:
+                    "success",
+
+                count:
+                    results.length,
+
+                results,
+
+                latencyMs:
+                    Date.now() -
+                    searchStart,
+
+                provider:
+                    "Crossref",
+
+                message:
+                    `Found ${results.length} research results using Crossref fallback`
+
+            };
+
+        } catch (crossrefError) {
+
+            const errorMessage =
+                `Research APIs failed: ${crossrefError.message}`;
+
+
+            console.error(
+                "Research Search Error:",
+                crossrefError.message
+            );
+
+
+            if (trace) {
+
+                addTraceEvent(
+                    trace,
+                    "tool_error",
+                    {
+                        tool:
+                            "Research Search",
+
+                        error:
+                            errorMessage,
+
+                        latencyMs:
+                            Date.now() -
+                            searchStart,
+
+                        rootCause:
+                            "Both primary and fallback research APIs failed"
+                    }
+                );
+
+            }
+
+
+            return {
+
+                tool:
+                    "Research Search",
+
+                status:
+                    "error",
+
+                count:
+                    0,
+
+                results:
+                    [],
+
+                latencyMs:
+                    Date.now() -
+                    searchStart,
+
+                error:
+                    errorMessage
+
+            };
+
+        }
+
+    }
+
 }
 
 
 // ==========================================
-// FRONTEND INTENT ANALYSIS
+// MULTI-AGENT API
 // ==========================================
 
-function analyzeQuery(query) {
+app.post(
+    "/api/research",
+    async (req, res) => {
 
-    const text =
-        query.toLowerCase();
+        let workflowTrace = null;
 
+        try {
 
-    let intent =
-        "general research";
-
-
-    let tools = [
-        "Web Search",
-        "Research Search"
-    ];
+            const {
+                query,
+                control
+            } = req.body || {};
 
 
-    if (
-        text.includes("competitor") ||
-        text.includes("company") ||
-        text.includes("activities") ||
-        text.includes("tesla") ||
-        text.includes("market")
-    ) {
+            // ==================================
+            // START TRACE
+            // ==================================
 
-        intent =
-            "competitor intelligence";
+            workflowTrace =
+                startTrace(
+                    "ResearchAI Multi-Agent Workflow",
+                    {
+                        endpoint:
+                            "/api/research",
 
-        tools = [
-            "Web Search",
-            "Research Search"
-        ];
+                        query,
+
+                        agents:
+                            [
+                                "Evidence Collection Agent",
+                                "Compliance Analysis Agent"
+                            ]
+                    }
+                );
+
+
+            addTraceEvent(
+                workflowTrace,
+                "request_received",
+                {
+                    query,
+
+                    control:
+                        control || query
+                }
+            );
+
+
+            // ==================================
+            // VALIDATION
+            // ==================================
+
+            if (
+                !query ||
+                !String(query).trim()
+            ) {
+
+                addTraceEvent(
+                    workflowTrace,
+                    "validation_error",
+                    {
+                        error:
+                            "Query is required"
+                    }
+                );
+
+
+                const completedTrace =
+                    endTrace(
+                        workflowTrace,
+                        "failed",
+                        "Missing query"
+                    );
+
+
+                return res.status(400).json({
+
+                    success:
+                        false,
+
+                    error:
+                        "Query is required",
+
+                    trace: {
+                        id:
+                            completedTrace?.id,
+
+                        name:
+                            completedTrace?.name,
+
+                        status:
+                            completedTrace?.status,
+
+                        latencyMs:
+                            completedTrace?.latency,
+
+                        events:
+                            completedTrace?.events || []
+                    }
+
+                });
+
+            }
+
+
+            const cleanQuery =
+                String(query).trim();
+
+
+            // ==================================
+            // CONTEXT START
+            // ==================================
+
+            addTraceEvent(
+                workflowTrace,
+                "context_start",
+                {
+                    query:
+                        cleanQuery
+                }
+            );
+
+
+            startContext(
+                cleanQuery
+            );
+
+
+            console.log(
+                "\n>>> AGENT 1: EVIDENCE COLLECTION"
+            );
+
+
+            // ==================================
+            // AGENT 1 — EVIDENCE
+            // ==================================
+
+            const evidenceStart =
+                Date.now();
+
+
+            addTraceEvent(
+                workflowTrace,
+                "agent_start",
+                {
+                    agent:
+                        "Evidence Collection Agent",
+
+                    task:
+                        "Collect evidence from web and research sources"
+                }
+            );
+
+
+            const tracedWebSearch =
+                async agentQuery =>
+                    webSearch(
+                        agentQuery,
+                        workflowTrace
+                    );
+
+
+            const tracedResearchSearch =
+                async agentQuery =>
+                    researchSearch(
+                        agentQuery,
+                        workflowTrace
+                    );
+
+
+            const evidenceResult =
+                await evidenceAgent(
+                    cleanQuery,
+                    tracedWebSearch,
+                    tracedResearchSearch
+                );
+
+
+            const webEvidence =
+                evidenceResult?.evidence?.web || {};
+
+            const researchEvidence =
+                evidenceResult?.evidence?.research || {};
+
+
+            const totalEvidence =
+                evidenceResult?.evidence?.totalEvidence ??
+                (
+                    (webEvidence.count || 0) +
+                    (researchEvidence.count || 0)
+                );
+
+
+            addTraceEvent(
+                workflowTrace,
+                "agent_complete",
+                {
+                    agent:
+                        "Evidence Collection Agent",
+
+                    latencyMs:
+                        Date.now() -
+                        evidenceStart,
+
+                    webEvidence:
+                        webEvidence.count || 0,
+
+                    researchEvidence:
+                        researchEvidence.count || 0,
+
+                    totalEvidence
+                }
+            );
+
+
+            // ==================================
+            // STORE EVIDENCE
+            // ==================================
+
+            storeEvidence(
+                evidenceResult
+            );
+
+
+            addTraceEvent(
+                workflowTrace,
+                "context_update",
+                {
+                    action:
+                        "Evidence stored and passed to Compliance Agent"
+                }
+            );
+
+
+            // ==================================
+            // RECOVERY DIAGNOSIS
+            // ==================================
+
+            const webStatus =
+                webEvidence.status;
+
+            const researchStatus =
+                researchEvidence.status;
+
+
+            if (
+                webStatus === "error" &&
+                researchStatus === "success"
+            ) {
+
+                addTraceEvent(
+                    workflowTrace,
+                    "recovery",
+                    {
+                        rootCause:
+                            webEvidence.error,
+
+                        diagnosis:
+                            "Web evidence tool failed but independent research tool succeeded",
+
+                        recoveryAction:
+                            "Continue workflow using research evidence",
+
+                        improvement:
+                            "System avoided complete workflow failure"
+                    }
+                );
+
+            }
+
+
+            console.log(
+                "\n>>> AGENT 2: COMPLIANCE ANALYSIS"
+            );
+
+
+            // ==================================
+            // AGENT 2 — COMPLIANCE
+            // ==================================
+
+            const complianceStart =
+                Date.now();
+
+
+            addTraceEvent(
+                workflowTrace,
+                "agent_start",
+                {
+                    agent:
+                        "Compliance Analysis Agent",
+
+                    task:
+                        "Analyze evidence, confidence and uncertainty"
+                }
+            );
+
+
+            const complianceResult =
+                await complianceAgent(
+                    evidenceResult,
+                    control || cleanQuery
+                );
+
+
+            const complianceAnalysis =
+                complianceResult?.analysis || {};
+
+
+            addTraceEvent(
+                workflowTrace,
+                "decision",
+                {
+                    agent:
+                        "Compliance Analysis Agent",
+
+                    status:
+                        complianceAnalysis.status,
+
+                    confidence:
+                        complianceAnalysis.confidence,
+
+                    uncertainty:
+                        complianceAnalysis.uncertainty,
+
+                    conflictDetected:
+                        complianceAnalysis.conflictDetected,
+
+                    needsMoreEvidence:
+                        complianceAnalysis.needsMoreEvidence
+                }
+            );
+
+
+            addTraceEvent(
+                workflowTrace,
+                "agent_complete",
+                {
+                    agent:
+                        "Compliance Analysis Agent",
+
+                    latencyMs:
+                        Date.now() -
+                        complianceStart
+                }
+            );
+
+
+            // ==================================
+            // STORE COMPLIANCE
+            // ==================================
+
+            storeCompliance(
+                complianceResult
+            );
+
+
+            addTraceEvent(
+                workflowTrace,
+                "context_update",
+                {
+                    action:
+                        "Compliance result stored"
+                }
+            );
+
+
+            // ==================================
+            // FINAL CONTEXT
+            // ==================================
+
+            const finalContext =
+                getContext();
+
+
+            // ==================================
+            // CREATE FINAL SUMMARY
+            // ==================================
+
+            const finalData = {
+
+                status:
+                    "success",
+
+                finalStatus:
+                    finalContext?.status,
+
+                evidenceCount:
+                    totalEvidence,
+
+                complianceStatus:
+                    complianceAnalysis.status,
+
+                webStatus:
+                    webStatus,
+
+                researchStatus:
+                    researchStatus,
+
+                researchProvider:
+                    researchEvidence.provider ||
+                    (
+                        Array.isArray(
+                            researchEvidence.results
+                        ) &&
+                            researchEvidence.results[0]
+                            ? researchEvidence.results[0].source
+                            : "Unknown"
+                    )
+
+            };
+
+
+            // ==================================
+            // END TRACE
+            // ==================================
+
+            const completedTrace =
+                endTrace(
+                    workflowTrace,
+                    "success"
+                );
+
+
+            completedTrace.finalData =
+                finalData;
+
+
+            console.log(
+                "\n[TRACE] Workflow completed"
+            );
+
+
+            console.log(
+                "[TRACE] Trace ID:",
+                completedTrace?.id
+            );
+
+
+            console.log(
+                "[TRACE] Final Summary:",
+                finalData
+            );
+
+
+            // ==================================
+            // FINAL RESPONSE
+            // ==================================
+
+            res.json({
+
+                success:
+                    true,
+
+                query:
+                    cleanQuery,
+
+                context: {
+                    status:
+                        finalContext?.status,
+
+                    query:
+                        finalContext?.query,
+
+                    hasEvidence:
+                        !!finalContext?.evidence,
+
+                    hasCompliance:
+                        !!finalContext?.compliance
+                },
+
+                evidenceAgent:
+                    evidenceResult,
+
+                complianceAgent:
+                    complianceResult,
+
+                trace: {
+
+                    id:
+                        completedTrace?.id,
+
+                    name:
+                        completedTrace?.name,
+
+                    status:
+                        completedTrace?.status,
+
+                    latencyMs:
+                        completedTrace?.latency,
+
+                    eventCount:
+                        completedTrace?.events?.length || 0,
+
+                    // IMPORTANT:
+                    // Frontend can now see all actual events
+                    events:
+                        completedTrace?.events || [],
+
+                    finalData,
+
+                    observability:
+                        [
+                            "Agent tracing",
+                            "Tool calls",
+                            "Decisions",
+                            "Latency",
+                            "Errors",
+                            "Recovery events",
+                            "Root cause diagnosis"
+                        ]
+                }
+
+            });
+
+        } catch (error) {
+
+            console.error(
+                "Multi-Agent Error:",
+                error.message
+            );
+
+
+            let failedTrace = null;
+
+
+            if (workflowTrace) {
+
+                addTraceEvent(
+                    workflowTrace,
+                    "workflow_error",
+                    {
+                        error:
+                            error.message,
+
+                        rootCause:
+                            "Unhandled workflow error"
+                    }
+                );
+
+
+                failedTrace =
+                    endTrace(
+                        workflowTrace,
+                        "failed",
+                        error.message
+                    );
+
+            }
+
+
+            res.status(500).json({
+
+                success:
+                    false,
+
+                error:
+                    error.message,
+
+                trace:
+                    failedTrace
+                        ? {
+                            id:
+                                failedTrace.id,
+
+                            name:
+                                failedTrace.name,
+
+                            status:
+                                failedTrace.status,
+
+                            latencyMs:
+                                failedTrace.latency,
+
+                            events:
+                                failedTrace.events || [],
+
+                            error:
+                                failedTrace.error
+                        }
+                        : null
+
+            });
+
+        }
 
     }
+);
 
 
-    if (
-        text.includes("patent") ||
-        text.includes("technology") ||
-        text.includes("invention")
-    ) {
+// ==========================================
+// START SERVER
+// ==========================================
 
-        intent =
-            "technology & patent research";
+app.listen(PORT, () => {
 
-        tools = [
-            "Research Search",
-            "Web Search"
-        ];
+    console.log(`
 
-    }
+========================================
+       ResearchAI Backend
+========================================
 
+Server running at:
+http://localhost:${PORT}
 
-    if (
-        text.includes("research") ||
-        text.includes("paper") ||
-        text.includes("scientific") ||
-        text.includes("study")
-    ) {
+Tool 1: Hacker News API
+Tool 2: Research API
 
-        intent =
-            "scientific research";
+Primary Research Source:
+OpenAlex
 
-        tools = [
-            "Research Search",
-            "Web Search"
-        ];
+Fallback Research Source:
+Crossref
 
-    }
+Multi-Agent System:
+Agent 1: Evidence Collection Agent
+Agent 2: Compliance Analysis Agent
 
+Observability:
+End-to-End Agent Tracing
+Tool Calls
+Latency
+Errors
+Root Cause Diagnosis
+Recovery Events
+Decisions
 
-    return {
+Controlled Failure Test:
+Search query containing "testfailure"
 
-        intent:
-            intent,
+Research API:
+POST /api/research
 
-        tools:
-            tools
+========================================
 
-    };
+    `);
 
-}
+});
