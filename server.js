@@ -1,482 +1,928 @@
-import express from "express";
-import cors from "cors";
-import dotenv from "dotenv";
+const landingScreen = document.getElementById("landingScreen");
+const agentApp = document.getElementById("agentApp");
+const enterAgent = document.getElementById("enterAgent");
 
-dotenv.config();
+const input = document.querySelector(".search-box input");
+const runButton = document.querySelector(".search-box button");
+const output = document.querySelector(".output");
+const steps = document.querySelectorAll(".step");
 
-const app = express();
+enterAgent.addEventListener("click", () => {
+    landingScreen.classList.add("hide");
 
-app.use(cors());
-app.use(express.json());
+    setTimeout(() => {
+        agentApp.classList.add("show");
+    }, 500);
+});
 
-const PORT = 3000;
+runButton.addEventListener("click", runAgent);
 
-
-// ==========================================
-// HELPER — CREATE SMART SEARCH QUERY
-// ==========================================
-
-function cleanSearchQuery(query) {
-
-    const stopWords = [
-        "latest",
-        "activities",
-        "activity",
-        "about",
-        "news",
-        "research",
-        "find",
-        "search",
-        "show",
-        "me"
-    ];
-
-    const words = query
-        .toLowerCase()
-        .split(" ")
-        .filter(word => !stopWords.includes(word));
-
-    return words.join(" ") || query;
+function delay(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 
 // ==========================================
-// TOOL 1 — HACKER NEWS API
+// MAIN MULTI-AGENT SYSTEM
 // ==========================================
 
-async function webSearch(query) {
+async function runAgent() {
+
+    const query = input.value.trim();
+
+    if (!query) {
+        input.focus();
+        return;
+    }
+
+    const analysis = analyzeQuery(query);
+
+    runButton.disabled = true;
+    runButton.textContent = "Investigating...";
+
+    steps.forEach(step => step.classList.remove("active"));
+
+
+    // ==========================================
+    // LIVE INVESTIGATION UI
+    // ==========================================
+
+    output.innerHTML = `
+        <div class="live-investigation">
+
+            <div class="live-header">
+                <div>
+                    <span class="live-dot"></span>
+                    MULTI-AGENT INVESTIGATION
+                </div>
+
+                <span class="live-badge">RUNNING</span>
+            </div>
+
+            <div class="live-query">
+
+                <small>RESEARCH QUERY</small>
+
+                <h3>${escapeHTML(query)}</h3>
+
+                <div class="detected-intent">
+
+                    <span>🧠</span>
+
+                    <div>
+                        <small>DETECTED INTENT</small>
+                        <b>${escapeHTML(analysis.intent)}</b>
+                    </div>
+
+                </div>
+
+            </div>
+
+
+            <div class="live-timeline">
+
+                <div class="timeline-item active">
+
+                    <div class="timeline-icon">🤖</div>
+
+                    <div>
+                        <b>Agent 1 — Evidence Collection</b>
+                        <p>Collecting evidence from external sources...</p>
+                    </div>
+
+                </div>
+
+
+                <div class="timeline-item">
+
+                    <div class="timeline-icon">🔎</div>
+
+                    <div>
+                        <b>Evidence Processing</b>
+                        <p>Waiting for Agent 1...</p>
+                    </div>
+
+                </div>
+
+
+                <div class="timeline-item">
+
+                    <div class="timeline-icon">🧠</div>
+
+                    <div>
+                        <b>Agent 2 — Compliance Analysis</b>
+                        <p>Waiting for evidence...</p>
+                    </div>
+
+                </div>
+
+
+                <div class="timeline-item">
+
+                    <div class="timeline-icon">📊</div>
+
+                    <div>
+                        <b>Compliance Classification</b>
+                        <p>Waiting for Agent 2...</p>
+                    </div>
+
+                </div>
+
+
+                <div class="timeline-item">
+
+                    <div class="timeline-icon">⚡</div>
+
+                    <div>
+                        <b>Generating Final Intelligence</b>
+                        <p>Waiting...</p>
+                    </div>
+
+                </div>
+
+            </div>
+
+        </div>
+    `;
+
+
+    const items =
+        document.querySelectorAll(".timeline-item");
+
+
+    steps[0].classList.add("active");
+
+    await delay(700);
+
+
+    // ==========================================
+    // CALL BACKEND
+    // ==========================================
+
+    let agentResult;
 
     try {
 
-        const searchQuery = cleanSearchQuery(query);
-
-        console.log("Web Search Query:", searchQuery);
-
-        const response = await fetch(
-            `https://hn.algolia.com/api/v1/search?query=${encodeURIComponent(searchQuery)}&tags=story&hitsPerPage=5`
+        console.log(
+            "Sending query to multi-agent backend:",
+            query
         );
 
+
+        const response = await fetch(
+            "http://localhost:3000/api/research",
+            {
+                method: "POST",
+
+                headers: {
+                    "Content-Type": "application/json"
+                },
+
+                body: JSON.stringify({
+                    query: query,
+                    control: query
+                })
+            }
+        );
+
+
         if (!response.ok) {
+
             throw new Error(
-                `Hacker News API error: ${response.status}`
-            );
-        }
-
-        const data = await response.json();
-
-        let hits = Array.isArray(data.hits)
-            ? data.hits
-            : [];
-
-
-        // FALLBACK SEARCH
-        if (hits.length === 0) {
-
-            const firstWord = searchQuery.split(" ")[0];
-
-            const fallbackResponse = await fetch(
-                `https://hn.algolia.com/api/v1/search?query=${encodeURIComponent(firstWord)}&tags=story&hitsPerPage=5`
+                `Backend request failed: ${response.status}`
             );
 
-            const fallbackData =
-                await fallbackResponse.json();
-
-            hits = Array.isArray(fallbackData.hits)
-                ? fallbackData.hits
-                : [];
         }
 
 
-        const results = hits.map(item => ({
-
-            title:
-                item.title ||
-                item.story_title ||
-                "Untitled",
-
-            url:
-                item.url ||
-                item.story_url ||
-                "",
-
-            source: "Hacker News"
-
-        }));
+        agentResult =
+            await response.json();
 
 
         console.log(
-            "Hacker News Results:",
-            results.length
+            "MULTI-AGENT RESPONSE:",
+            agentResult
         );
 
-
-        return {
-
-            tool: "Web Search",
-
-            status: "success",
-
-            count: results.length,
-
-            results: results,
-
-            message:
-                `Found ${results.length} web/news results`
-
-        };
 
     } catch (error) {
 
         console.error(
-            "Web Search Error:",
-            error.message
+            "BACKEND ERROR:",
+            error
         );
 
-        return {
 
-            tool: "Web Search",
+        output.innerHTML = `
 
-            status: "error",
+            <div class="final-report">
 
-            count: 0,
+                <div class="report-top">
 
-            results: [],
+                    <div>
+                        <span class="complete-dot"></span>
+                        CONNECTION ERROR
+                    </div>
 
-            error: error.message
+                    <span>ResearchAI</span>
 
-        };
+                </div>
 
+
+                <div class="ai-insight">
+
+                    <h3>
+                        ⚠️ Backend Not Available
+                    </h3>
+
+                    <p>
+                        Please make sure the backend is running
+                        at http://localhost:3000
+                    </p>
+
+                    <p>
+                        Error:
+                        ${escapeHTML(error.message)}
+                    </p>
+
+                </div>
+
+            </div>
+
+        `;
+
+
+        runButton.disabled = false;
+        runButton.textContent = "Run Agent →";
+
+        return;
     }
 
+
+    // ==========================================
+    // AGENT 1 — EVIDENCE COLLECTION
+    // ==========================================
+
+    items[0].classList.add("active");
+
+    items[0].querySelector("p").textContent =
+        "Evidence Collection Agent is collecting data...";
+
+    steps[1].classList.add("active");
+
+    await delay(700);
+
+
+    const evidenceAgent =
+        agentResult.evidenceAgent || {};
+
+    const evidence =
+        evidenceAgent.evidence || {};
+
+    const webEvidence =
+        evidence.web || {};
+
+    const researchEvidence =
+        evidence.research || {};
+
+
+    const webCount =
+        webEvidence.count || 0;
+
+    const researchCount =
+        researchEvidence.count || 0;
+
+    const totalEvidence =
+        webCount + researchCount;
+
+
+    // ==========================================
+    // EVIDENCE PROCESSING
+    // ==========================================
+
+    items[1].classList.add("active");
+
+    items[1].querySelector("p").textContent =
+        `${totalEvidence} evidence items collected from Web + Research sources`;
+
+    steps[2].classList.add("active");
+
+    await delay(900);
+
+
+    // ==========================================
+    // AGENT 2 — COMPLIANCE ANALYSIS
+    // ==========================================
+
+    items[2].classList.add("active");
+
+    items[2].querySelector("p").textContent =
+        "Compliance Analysis Agent is analyzing collected evidence...";
+
+    steps[3].classList.add("active");
+
+    await delay(900);
+
+
+    // ==========================================
+    // COMPLIANCE RESULT
+    // ==========================================
+
+    const complianceAgent =
+        agentResult.complianceAgent || {};
+
+    const complianceAnalysis =
+        complianceAgent.analysis || {};
+
+
+    const complianceStatus =
+        complianceAnalysis.status ||
+        "Insufficient Evidence";
+
+
+    items[3].classList.add("active");
+
+    items[3].querySelector("p").textContent =
+        `Classification: ${complianceStatus}`;
+
+    steps[4].classList.add("active");
+
+    await delay(900);
+
+
+    // ==========================================
+    // FINAL INTELLIGENCE
+    // ==========================================
+
+    items[4].classList.add("active");
+
+    items[4].querySelector("p").textContent =
+        `Combining ${totalEvidence} evidence items with compliance analysis`;
+
+    await delay(900);
+
+
+    showFinal(
+        query,
+        agentResult
+    );
+
+
+    runButton.disabled = false;
+    runButton.textContent = "Run Agent →";
 }
 
 
 // ==========================================
-// TOOL 2A — OPENALEX RESEARCH API
+// FINAL MULTI-AGENT REPORT
 // ==========================================
 
-async function searchOpenAlex(searchQuery) {
+function showFinal(query, agentResult) {
 
-    const response = await fetch(
-        `https://api.openalex.org/works?search=${encodeURIComponent(searchQuery)}&per-page=5`
-    );
+    const evidenceAgent =
+        agentResult.evidenceAgent || {};
 
-    if (!response.ok) {
-
-        throw new Error(
-            `OpenAlex API error: ${response.status}`
-        );
-
-    }
-
-    const data = await response.json();
-
-    const works = Array.isArray(data.results)
-        ? data.results
-        : [];
+    const complianceAgent =
+        agentResult.complianceAgent || {};
 
 
-    return works.map(item => ({
+    const evidence =
+        evidenceAgent.evidence || {};
 
-        title:
-            item.title ||
-            "Untitled",
+    const webResult =
+        evidence.web || {};
 
-        url:
-            item.doi
-                ? `https://doi.org/${item.doi.replace("https://doi.org/", "")}`
-                : "",
-
-        publicationDate:
-            item.publication_date ||
-            "Unknown",
-
-        citedBy:
-            item.cited_by_count ?? 0,
-
-        source:
-            "OpenAlex"
-
-    }));
-
-}
+    const researchResult =
+        evidence.research || {};
 
 
-// ==========================================
-// TOOL 2B — CROSSREF FALLBACK API
-// ==========================================
+    const analysis =
+        complianceAgent.analysis || {};
 
-async function searchCrossref(searchQuery) {
 
-    console.log(
-        "Using Crossref Research Fallback..."
-    );
-
-    const response = await fetch(
-        `https://api.crossref.org/works?query=${encodeURIComponent(searchQuery)}&rows=5`
-    );
-
-    if (!response.ok) {
-
-        throw new Error(
-            `Crossref API error: ${response.status}`
-        );
-
-    }
-
-    const data = await response.json();
-
-    const works =
-        data.message &&
-            Array.isArray(data.message.items)
-            ? data.message.items
+    const webResults =
+        Array.isArray(webResult.results)
+            ? webResult.results
             : [];
 
 
-    return works.map(item => {
-
-        let publicationDate = "Unknown";
-
-        if (
-            item.published &&
-            Array.isArray(
-                item.published["date-parts"]
-            )
-        ) {
-
-            const dateParts =
-                item.published["date-parts"][0];
-
-            if (dateParts) {
-
-                publicationDate =
-                    dateParts.join("-");
-
-            }
-
-        }
+    const researchResults =
+        Array.isArray(researchResult.results)
+            ? researchResult.results
+            : [];
 
 
-        return {
-
-            title:
-                Array.isArray(item.title) &&
-                    item.title.length > 0
-                    ? item.title[0]
-                    : "Untitled",
-
-            url:
-                item.URL ||
-                (item.DOI
-                    ? `https://doi.org/${item.DOI}`
-                    : ""),
-
-            publicationDate:
-                publicationDate,
-
-            citedBy:
-                item["is-referenced-by-count"] ?? 0,
-
-            source:
-                "Crossref"
-
-        };
-
-    });
-
-}
+    const totalEvidence =
+        webResults.length +
+        researchResults.length;
 
 
-// ==========================================
-// TOOL 2 — RESEARCH SEARCH
-// OPENALEX + CROSSREF FALLBACK
-// ==========================================
-
-async function researchSearch(query) {
-
-    const searchQuery =
-        cleanSearchQuery(query);
-
-    console.log(
-        "Research Search Query:",
-        searchQuery
-    );
+    const status =
+        analysis.status ||
+        "Insufficient Evidence";
 
 
-    // --------------------------------------
-    // TRY OPENALEX FIRST
-    // --------------------------------------
-
-    try {
-
-        console.log(
-            "Trying OpenAlex API..."
-        );
-
-        let results =
-            await searchOpenAlex(searchQuery);
+    const reason =
+        analysis.reason ||
+        "Evidence analysis completed.";
 
 
-        // If no results, try first word
+    // ==========================================
+    // BUILD SOURCE RESULTS
+    // ==========================================
 
-        if (results.length === 0) {
-
-            const firstWord =
-                searchQuery.split(" ")[0];
-
-            console.log(
-                "OpenAlex fallback query:",
-                firstWord
-            );
-
-            results =
-                await searchOpenAlex(firstWord);
-
-        }
+    let resultHTML = "";
 
 
-        console.log(
-            "OpenAlex Results:",
-            results.length
-        );
+    // ------------------------------------------
+    // WEB RESULTS
+    // ------------------------------------------
+
+    if (webResults.length > 0) {
+
+        resultHTML += `
+
+            <div class="tool-results">
+
+                <div class="tool-results-header">
+
+                    <h3>
+                        Web Evidence
+                    </h3>
+
+                    <span>
+                        ${webResults.length} RESULTS
+                    </span>
+
+                </div>
+
+        `;
 
 
-        return {
+        webResults.forEach(
+            (item, index) => {
 
-            tool:
-                "Research Search",
+                const title =
+                    item.title ||
+                    "Untitled Result";
 
-            status:
-                "success",
-
-            count:
-                results.length,
-
-            results:
-                results,
-
-            message:
-                `Found ${results.length} research results using OpenAlex`
-
-        };
-
-    } catch (openAlexError) {
-
-        console.log(
-            "OpenAlex unavailable:",
-            openAlexError.message
-        );
-
-        console.log(
-            "Switching to Crossref..."
-        );
+                const url =
+                    item.url || "";
 
 
-        // --------------------------------------
-        // FALLBACK TO CROSSREF
-        // --------------------------------------
+                resultHTML += `
 
-        try {
+                    <div class="result-item">
 
-            let results =
-                await searchCrossref(searchQuery);
+                        <div class="result-number">
+                            ${index + 1}
+                        </div>
 
+                        <div class="result-content">
 
-            // If no results, try first word
+                            ${url
+                        ? `
+                                        <a
+                                            href="${escapeHTML(url)}"
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            class="result-title"
+                                        >
+                                            ${escapeHTML(title)}
+                                        </a>
+                                    `
+                        : `
+                                        <div class="result-title">
+                                            ${escapeHTML(title)}
+                                        </div>
+                                    `
+                    }
 
-            if (results.length === 0) {
+                            <div class="result-meta">
 
-                const firstWord =
-                    searchQuery.split(" ")[0];
+                                <span>
+                                    📌 Hacker News
+                                </span>
 
-                console.log(
-                    "Crossref fallback query:",
-                    firstWord
-                );
+                            </div>
 
-                results =
-                    await searchCrossref(firstWord);
+                        </div>
+
+                    </div>
+
+                `;
 
             }
+        );
 
 
-            console.log(
-                "Crossref Results:",
-                results.length
-            );
-
-
-            return {
-
-                tool:
-                    "Research Search",
-
-                status:
-                    "success",
-
-                count:
-                    results.length,
-
-                results:
-                    results,
-
-                message:
-                    `Found ${results.length} research results using Crossref fallback`
-
-            };
-
-        } catch (crossrefError) {
-
-            console.error(
-                "Research Search Error:",
-                crossrefError.message
-            );
-
-
-            return {
-
-                tool:
-                    "Research Search",
-
-                status:
-                    "error",
-
-                count:
-                    0,
-
-                results:
-                    [],
-
-                error:
-                    `Research APIs failed: ${crossrefError.message}`
-
-            };
-
-        }
+        resultHTML += `
+            </div>
+        `;
 
     }
 
+
+    // ------------------------------------------
+    // RESEARCH RESULTS
+    // ------------------------------------------
+
+    if (researchResults.length > 0) {
+
+        resultHTML += `
+
+            <div class="tool-results">
+
+                <div class="tool-results-header">
+
+                    <h3>
+                        Research Evidence
+                    </h3>
+
+                    <span>
+                        ${researchResults.length} RESULTS
+                    </span>
+
+                </div>
+
+        `;
+
+
+        researchResults.forEach(
+            (item, index) => {
+
+                const title =
+                    item.title ||
+                    "Untitled Research";
+
+
+                const url =
+                    item.url || "";
+
+
+                const date =
+                    item.publicationDate
+                        ? `Published: ${item.publicationDate}`
+                        : "";
+
+
+                const citations =
+                    item.citedBy !== undefined
+                        ? `Citations: ${item.citedBy}`
+                        : "";
+
+
+                resultHTML += `
+
+                    <div class="result-item">
+
+                        <div class="result-number">
+                            ${index + 1}
+                        </div>
+
+                        <div class="result-content">
+
+                            ${url
+                        ? `
+                                        <a
+                                            href="${escapeHTML(url)}"
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            class="result-title"
+                                        >
+                                            ${escapeHTML(title)}
+                                        </a>
+                                    `
+                        : `
+                                        <div class="result-title">
+                                            ${escapeHTML(title)}
+                                        </div>
+                                    `
+                    }
+
+                            <div class="result-meta">
+
+                                <span>
+                                    📚 ${escapeHTML(
+                        item.source ||
+                        "Research Source"
+                    )}
+                                </span>
+
+                                ${date
+                        ? `
+                                            <span>
+                                                📅 ${escapeHTML(date)}
+                                            </span>
+                                        `
+                        : ""
+                    }
+
+                                ${citations
+                        ? `
+                                            <span>
+                                                📊 ${escapeHTML(citations)}
+                                            </span>
+                                        `
+                        : ""
+                    }
+
+                            </div>
+
+                        </div>
+
+                    </div>
+
+                `;
+
+            }
+        );
+
+
+        resultHTML += `
+            </div>
+        `;
+
+    }
+
+
+    // ==========================================
+    // FINAL UI
+    // ==========================================
+
+    output.innerHTML = `
+
+        <div class="final-report">
+
+
+            <!-- REPORT HEADER -->
+
+            <div class="report-top">
+
+                <div>
+
+                    <span class="complete-dot"></span>
+
+                    INVESTIGATION COMPLETE
+
+                </div>
+
+                <span>
+                    ResearchAI
+                </span>
+
+            </div>
+
+
+            <!-- QUERY -->
+
+            <div class="report-query">
+
+                <small>
+                    RESEARCH QUERY
+                </small>
+
+                <h2>
+                    ${escapeHTML(query)}
+                </h2>
+
+            </div>
+
+
+            <!-- ==================================
+                 MULTI-AGENT ARCHITECTURE
+                 ================================== -->
+
+            <div
+                class="ai-insight"
+                style="margin-bottom:20px;"
+            >
+
+                <h3>
+                    🤖 Multi-Agent Architecture
+                </h3>
+
+                <p>
+                    Two specialized agents collaborated
+                    sequentially to complete the investigation.
+                </p>
+
+            </div>
+
+
+            <!-- AGENT CARDS -->
+
+            <div class="report-summary">
+
+
+                <!-- AGENT 1 -->
+
+                <div class="summary-card">
+
+                    <span>
+                        🔎
+                    </span>
+
+                    <div>
+
+                        <b>
+                            Agent 1 — Evidence Collection
+                        </b>
+
+                        <p>
+                            Collected
+                            ${totalEvidence}
+                            evidence items
+                            from external sources.
+                        </p>
+
+                    </div>
+
+                </div>
+
+
+                <!-- COLLABORATION -->
+
+                <div class="summary-card">
+
+                    <span>
+                        🔄
+                    </span>
+
+                    <div>
+
+                        <b>
+                            Agent Collaboration
+                        </b>
+
+                        <p>
+                            Evidence Agent →
+                            Compliance Agent
+                        </p>
+
+                    </div>
+
+                </div>
+
+
+                <!-- AGENT 2 -->
+
+                <div class="summary-card">
+
+                    <span>
+                        🧠
+                    </span>
+
+                    <div>
+
+                        <b>
+                            Agent 2 — Compliance Analysis
+                        </b>
+
+                        <p>
+                            Analyzed evidence and
+                            classified the control.
+                        </p>
+
+                    </div>
+
+                </div>
+
+
+            </div>
+
+
+            <!-- ==================================
+                 COMPLIANCE RESULT
+                 ================================== -->
+
+            <div
+                class="ai-insight"
+                style="margin-top:20px;"
+            >
+
+                <h3>
+                    ${status === "Supported"
+            ? "✅"
+            : status === "Insufficient Evidence"
+                ? "⚠️"
+                : "❌"
+        }
+
+                    Compliance Result:
+                    ${escapeHTML(status)}
+                </h3>
+
+                <p>
+                    ${escapeHTML(reason)}
+                </p>
+
+                <p>
+                    <strong>
+                        Evidence analyzed:
+                    </strong>
+
+                    ${totalEvidence}
+                </p>
+
+            </div>
+
+
+            <!-- SOURCE RESULTS -->
+
+            ${resultHTML}
+
+
+            <!-- FINAL INSIGHT -->
+
+            <div class="ai-insight">
+
+                <h3>
+                    💡 Actionable Insight
+                </h3>
+
+                <p>
+                    The Evidence Collection Agent gathered
+                    external evidence and passed it to the
+                    Compliance Analysis Agent. The second
+                    agent evaluated the evidence and produced
+                    the final compliance classification.
+                </p>
+
+            </div>
+
+
+        </div>
+
+    `;
 }
 
 
 // ==========================================
-// AGENT DECISION ENGINE
+// SECURITY
 // ==========================================
 
-function chooseTools(query) {
+function escapeHTML(text) {
 
-    const text = query.toLowerCase();
+    const div =
+        document.createElement("div");
+
+    div.textContent =
+        String(text ?? "");
+
+    return div.innerHTML;
+}
+
+
+// ==========================================
+// FRONTEND INTENT ANALYSIS
+// ==========================================
+
+function analyzeQuery(query) {
+
+    const text =
+        query.toLowerCase();
+
+
+    let intent =
+        "general research";
+
+
+    let tools = [
+        "Web Search",
+        "Research Search"
+    ];
+
+
+    if (
+        text.includes("competitor") ||
+        text.includes("company") ||
+        text.includes("activities") ||
+        text.includes("tesla") ||
+        text.includes("market")
+    ) {
+
+        intent =
+            "competitor intelligence";
+
+        tools = [
+            "Web Search",
+            "Research Search"
+        ];
+
+    }
 
 
     if (
         text.includes("patent") ||
-        text.includes("paper") ||
-        text.includes("scientific") ||
-        text.includes("research") ||
-        text.includes("study")
+        text.includes("technology") ||
+        text.includes("invention")
     ) {
 
-        return [
+        intent =
+            "technology & patent research";
+
+        tools = [
             "Research Search",
             "Web Search"
         ];
@@ -485,165 +931,31 @@ function chooseTools(query) {
 
 
     if (
-        text.includes("competitor") ||
-        text.includes("company") ||
-        text.includes("tesla") ||
-        text.includes("activity") ||
-        text.includes("news") ||
-        text.includes("latest")
+        text.includes("research") ||
+        text.includes("paper") ||
+        text.includes("scientific") ||
+        text.includes("study")
     ) {
 
-        return [
-            "Web Search",
-            "Research Search"
+        intent =
+            "scientific research";
+
+        tools = [
+            "Research Search",
+            "Web Search"
         ];
 
     }
 
 
-    return [
-        "Web Search",
-        "Research Search"
-    ];
+    return {
+
+        intent:
+            intent,
+
+        tools:
+            tools
+
+    };
 
 }
-
-
-// ==========================================
-// AGENT API
-// ==========================================
-
-app.post("/api/research", async (req, res) => {
-
-    try {
-
-        const { query } = req.body;
-
-
-        if (!query) {
-
-            return res.status(400).json({
-
-                error:
-                    "Query is required"
-
-            });
-
-        }
-
-
-        console.log(
-            "\n=============================="
-        );
-
-        console.log(
-            "NEW AGENT QUERY:",
-            query
-        );
-
-        console.log(
-            "=============================="
-        );
-
-
-        const selectedTools =
-            chooseTools(query);
-
-        const results = [];
-
-
-        // --------------------------------------
-        // AGENT EXECUTES SELECTED TOOLS
-        // --------------------------------------
-
-        for (const tool of selectedTools) {
-
-            if (tool === "Web Search") {
-
-                results.push(
-                    await webSearch(query)
-                );
-
-            }
-
-
-            if (tool === "Research Search") {
-
-                results.push(
-                    await researchSearch(query)
-                );
-
-            }
-
-        }
-
-
-        // --------------------------------------
-        // RETURN AGENT OBSERVATIONS
-        // --------------------------------------
-
-        res.json({
-
-            success:
-                true,
-
-            query:
-                query,
-
-            selectedTools:
-                selectedTools,
-
-            results:
-                results
-
-        });
-
-    } catch (error) {
-
-        console.error(
-            "Agent Error:",
-            error
-        );
-
-
-        res.status(500).json({
-
-            error:
-                "Agent failed to process the request"
-
-        });
-
-    }
-
-});
-
-
-// ==========================================
-// START SERVER
-// ==========================================
-
-app.listen(PORT, () => {
-
-    console.log(`
-
-========================================
-       ResearchAI Backend
-========================================
-
-Server running at:
-http://localhost:${PORT}
-
-Tool 1: Hacker News API
-
-Tool 2: Research API
-Primary: OpenAlex
-Fallback: Crossref
-
-Research API:
-POST /api/research
-
-========================================
-
-    `);
-
-});
